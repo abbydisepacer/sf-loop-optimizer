@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+
 /**
  * Microsoft's access/refresh tokens are too large for a cookie — even split
  * into their own cookie (the first fix tried here), a refresh token alone
@@ -6,10 +9,17 @@
  * per-cookie limit, which fails completely silently. Held server-side
  * instead, keyed by the session's Salesforce userId.
  *
- * This is an in-memory Map, not a database — it's lost on server restart
- * (an affected user just reconnects Outlook) and isn't shared across
- * multiple server instances. Fine for this app's current single-process
- * deployment; would need a real store (DB/Redis) to scale beyond that.
+ * Persisted to a local JSON file rather than a database — this app doesn't
+ * have one, and deploys to a single always-on EC2 instance, so a file on
+ * its disk survives restarts/redeploys just as well a database would for
+ * this purpose, without the added infrastructure. Would need a real shared
+ * store (DB/Redis) if this ever runs on more than one instance at once.
+ *
+ * Reads/writes are synchronous on purpose: Node's synchronous fs calls
+ * block the event loop for their duration, which — since JS in a single
+ * Node process never runs two callbacks at once — makes each
+ * read-modify-write here atomic with respect to concurrent requests. This
+ * app's request volume is far too low for that blocking cost to matter.
  */
 
 export type MicrosoftTokenData = {
@@ -19,25 +29,33 @@ export type MicrosoftTokenData = {
   microsoftTokenExpiresAt: number;
 };
 
-// Pinned to globalThis, not a plain module-level variable — Next.js's dev
-// server (particularly with Turbopack) can give different route handler
-// files their own separately-instantiated copy of an imported module, so a
-// plain `const store = new Map()` isn't reliably shared across routes even
-// within the same Node process. globalThis is truly process-wide.
-declare global {
-  var __msTokenStore: Map<string, MicrosoftTokenData> | undefined;
+const STORE_FILE = path.join(process.cwd(), ".data", "ms-tokens.json");
+
+function readAll(): Record<string, MicrosoftTokenData> {
+  try {
+    return JSON.parse(fs.readFileSync(STORE_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
 }
 
-const store = globalThis.__msTokenStore ?? (globalThis.__msTokenStore = new Map<string, MicrosoftTokenData>());
+function writeAll(data: Record<string, MicrosoftTokenData>): void {
+  fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
+  fs.writeFileSync(STORE_FILE, JSON.stringify(data), "utf-8");
+}
 
 export function setMicrosoftTokens(userId: string, data: MicrosoftTokenData): void {
-  store.set(userId, data);
+  const all = readAll();
+  all[userId] = data;
+  writeAll(all);
 }
 
 export function getMicrosoftTokens(userId: string): MicrosoftTokenData | null {
-  return store.get(userId) ?? null;
+  return readAll()[userId] ?? null;
 }
 
 export function clearMicrosoftTokens(userId: string): void {
-  store.delete(userId);
+  const all = readAll();
+  delete all[userId];
+  writeAll(all);
 }
