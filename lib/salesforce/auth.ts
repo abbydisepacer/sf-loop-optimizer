@@ -32,6 +32,13 @@ export function buildAuthorizeUrl(state: string, codeChallenge: string): string 
     state,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
+    // Forces the login page every time instead of silently reusing an
+    // already-active Salesforce session in the browser — our own logout
+    // doesn't touch Salesforce's session, so without this, "Sign in with
+    // Salesforce" after logging out could re-enter as the same user with
+    // no way to switch accounts. Salesforce only supports "login"/"consent"
+    // here — no "select_account" like Google/Microsoft.
+    prompt: "login",
   });
   return `${loginUrl()}/services/oauth2/authorize?${params}`;
 }
@@ -65,6 +72,8 @@ export async function exchangeCodeForToken(code: string, codeVerifier: string): 
 export type SalesforceUserProfile = {
   userId: string;
   name: string;
+  /** Assumed to match this user's Microsoft 365 UPN — see lib/microsoft/calendar.ts. */
+  email: string;
   /** The user's Role Hierarchy role name — e.g. "Internal Wholesaler". Null if unassigned. */
   roleName: string | null;
 };
@@ -97,11 +106,13 @@ export async function fetchUserProfile(token: TokenResponse): Promise<Salesforce
   return {
     userId: identity.user_id,
     name: identity.display_name,
+    email: identity.email,
     roleName,
   };
 }
 
-export type AssignedExternal = { id: string; name: string };
+/** email is assumed to match the wholesaler's Microsoft 365 UPN — see lib/microsoft/calendar.ts. */
+export type AssignedExternal = { id: string; name: string; email: string };
 
 /**
  * Externals assigned to a given Internal Wholesaler, via the Lookup field
@@ -122,7 +133,7 @@ export async function fetchAssignedExternalWholesalers(
     return [];
   }
 
-  const soql = `SELECT Id, Name FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true AND ${field} = '${internalUserId}'`;
+  const soql = `SELECT Id, Name, Email FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true AND ${field} = '${internalUserId}'`;
   const res = await fetch(
     `${token.instance_url}/services/data/${SALESFORCE_API_VERSION}/query?q=${encodeURIComponent(soql)}`,
     { headers: { Authorization: `Bearer ${token.access_token}` } }
@@ -131,8 +142,8 @@ export async function fetchAssignedExternalWholesalers(
     throw new Error(`Salesforce assigned-externals lookup failed (${res.status})`);
   }
   const result = await res.json();
-  const records: { Id: string; Name: string }[] = result.records ?? [];
-  return records.map((r) => ({ id: r.Id, name: r.Name }));
+  const records: { Id: string; Name: string; Email: string }[] = result.records ?? [];
+  return records.map((r) => ({ id: r.Id, name: r.Name, email: r.Email }));
 }
 
 /**
@@ -163,7 +174,7 @@ export async function fetchAllExternalWholesalers(token: {
   access_token: string;
   instance_url: string;
 }): Promise<AssignedExternal[]> {
-  const soql = `SELECT Id, Name FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true`;
+  const soql = `SELECT Id, Name, Email FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true`;
   const res = await fetch(
     `${token.instance_url}/services/data/${SALESFORCE_API_VERSION}/query?q=${encodeURIComponent(soql)}`,
     { headers: { Authorization: `Bearer ${token.access_token}` } }
@@ -172,6 +183,6 @@ export async function fetchAllExternalWholesalers(token: {
     throw new Error(`Salesforce all-externals lookup failed (${res.status})`);
   }
   const result = await res.json();
-  const records: { Id: string; Name: string }[] = result.records ?? [];
-  return records.map((r) => ({ id: r.Id, name: r.Name }));
+  const records: { Id: string; Name: string; Email: string }[] = result.records ?? [];
+  return records.map((r) => ({ id: r.Id, name: r.Name, email: r.Email }));
 }

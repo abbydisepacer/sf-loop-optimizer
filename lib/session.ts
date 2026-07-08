@@ -1,13 +1,21 @@
-import { createHmac, timingSafeEqual } from "crypto";
+import { signCookie, verifyCookie } from "./signed-cookie";
 
 export const SESSION_COOKIE_NAME = "sf_loop_session";
 
-export type AssignedExternal = { id: string; name: string };
+/** email is the wholesaler's Microsoft 365 UPN, assumed to match their Salesforce login email. */
+export type AssignedExternal = { id: string; name: string; email: string };
 
 export type Session = {
   /** Salesforce User Id (or a mock id, when Salesforce isn't configured yet). */
   userId: string;
   name: string;
+  /**
+   * This user's own email — assumed to match their Microsoft 365 UPN.
+   * Used by the "external" role to read/write their own Outlook calendar;
+   * internal/admin sessions use assignedExternals' emails instead, to act
+   * on someone else's shared calendar.
+   */
+  email?: string;
   role: "internal" | "external" | "admin";
   /**
    * For internal role sessions: the external wholesalers assigned to this
@@ -24,45 +32,26 @@ export type Session = {
    */
   salesforceAccessToken?: string;
   salesforceInstanceUrl?: string;
+  // Note: Microsoft tokens are deliberately NOT stored here, or in any
+  // cookie — see lib/microsoft/token-store.ts. Graph access/refresh tokens
+  // are large enough on their own to exceed the browser's ~4KB per-cookie
+  // limit, which fails completely silently (the Set-Cookie looked fine,
+  // but the browser just declined to store it) — the exact same failure
+  // mode hit earlier with admin's org-wide assignedExternals list.
 };
 
-function getSecret(): string {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) {
-    throw new Error("SESSION_SECRET is not set — required to sign session cookies.");
-  }
-  return secret;
-}
-
 export function signSession(session: Session): string {
-  const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
-  const signature = createHmac("sha256", getSecret()).update(payload).digest("base64url");
-  return `${payload}.${signature}`;
+  return signCookie(session);
 }
 
 export function verifySession(cookieValue: string | undefined): Session | null {
-  if (!cookieValue) return null;
-  const [payload, signature] = cookieValue.split(".");
-  if (!payload || !signature) return null;
-
-  const expected = createHmac("sha256", getSecret()).update(payload).digest("base64url");
-  const actual = Buffer.from(signature);
-  const expectedBuf = Buffer.from(expected);
-  if (actual.length !== expectedBuf.length || !timingSafeEqual(actual, expectedBuf)) {
-    return null;
+  const parsed = verifyCookie<Session>(cookieValue);
+  if (
+    parsed?.userId &&
+    parsed?.name &&
+    (parsed.role === "internal" || parsed.role === "external" || parsed.role === "admin")
+  ) {
+    return parsed;
   }
-
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf-8"));
-    if (
-      parsed?.userId &&
-      parsed?.name &&
-      (parsed.role === "internal" || parsed.role === "external" || parsed.role === "admin")
-    ) {
-      return parsed as Session;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return null;
 }

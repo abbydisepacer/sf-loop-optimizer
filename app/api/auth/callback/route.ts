@@ -41,9 +41,14 @@ export async function GET(request: NextRequest) {
     const assignedExternals =
       role === "internal" ? await fetchAssignedExternalWholesalers(token, profile.userId) : undefined;
 
+    // Microsoft's connection lives in a server-side store keyed by userId
+    // (see lib/microsoft/token-store.ts), not the session cookie — so it's
+    // untouched by a fresh Salesforce login like this one, and survives,
+    // e.g., a prompt=login re-authentication with no carry-over logic needed.
     const session = signSession({
       userId: profile.userId,
       name: profile.name,
+      email: profile.email,
       role,
       assignedExternals,
       salesforceAccessToken: token.access_token,

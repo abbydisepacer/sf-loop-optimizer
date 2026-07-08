@@ -6,9 +6,9 @@ export const MOCK_INTERNAL_WHOLESALERS = [
 ];
 
 export const MOCK_WHOLESALERS: Wholesaler[] = [
-  { id: "jordan-lee", name: "Jordan Lee", internalWholesalerId: "mock-internal-alex" },
-  { id: "casey-morgan", name: "Casey Morgan", internalWholesalerId: "mock-internal-alex" },
-  { id: "sam-patel", name: "Sam Patel", internalWholesalerId: "mock-internal-jamie" },
+  { id: "jordan-lee", name: "Jordan Lee", internalWholesalerId: "mock-internal-alex", email: "jordan.lee@example.com" },
+  { id: "casey-morgan", name: "Casey Morgan", internalWholesalerId: "mock-internal-alex", email: "casey.morgan@example.com" },
+  { id: "sam-patel", name: "Sam Patel", internalWholesalerId: "mock-internal-jamie", email: "sam.patel@example.com" },
 ];
 
 /**

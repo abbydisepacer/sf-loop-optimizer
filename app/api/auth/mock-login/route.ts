@@ -26,14 +26,14 @@ export async function GET(request: NextRequest) {
       ? (() => {
           const wholesalerId = url.searchParams.get("wholesaler") ?? MOCK_WHOLESALERS[0].id;
           const wholesaler = MOCK_WHOLESALERS.find((w) => w.id === wholesalerId) ?? MOCK_WHOLESALERS[0];
-          return { userId: wholesaler.id, name: wholesaler.name, role: "external" as const };
+          return { userId: wholesaler.id, name: wholesaler.name, email: wholesaler.email, role: "external" as const };
         })()
       : role === "admin"
         ? {
             userId: "mock-admin",
             name: "Admin User",
             role: "admin" as const,
-            assignedExternals: MOCK_WHOLESALERS.map((w) => ({ id: w.id, name: w.name })),
+            assignedExternals: MOCK_WHOLESALERS.map((w) => ({ id: w.id, name: w.name, email: w.email })),
           }
         : (() => {
             const internalId = url.searchParams.get("internal") ?? MOCK_INTERNAL_WHOLESALERS[0].id;
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
               MOCK_INTERNAL_WHOLESALERS.find((i) => i.id === internalId) ?? MOCK_INTERNAL_WHOLESALERS[0];
             const assignedExternals = MOCK_WHOLESALERS.filter(
               (w) => w.internalWholesalerId === internalUser.id
-            ).map((w) => ({ id: w.id, name: w.name }));
+            ).map((w) => ({ id: w.id, name: w.name, email: w.email }));
             return {
               userId: internalUser.id,
               name: internalUser.name,

@@ -10,6 +10,8 @@ export type Wholesaler = {
   name: string;
   /** Mock stand-in for the Salesforce Lookup naming their assigned Internal Wholesaler. */
   internalWholesalerId: string;
+  /** Assumed to match their Microsoft 365 UPN — see lib/microsoft/calendar.ts. */
+  email: string;
 };
 
 export type LoopStop = {

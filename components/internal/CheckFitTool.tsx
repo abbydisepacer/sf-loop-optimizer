@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getStopsForDate } from "@/lib/mock-data";
 import { buildLoop } from "@/lib/routing-engine";
 import { useRealDriveTimes } from "@/lib/use-real-drive-times";
+import { useOutlookLoop } from "@/lib/use-outlook-loop";
+import { usePersistedTimezone } from "@/lib/use-persisted-timezone";
+import { COMMON_TIMEZONES } from "@/lib/timezones";
 import { formatAddress } from "@/lib/maps-links";
-import { todayIso } from "@/lib/format";
+import { todayIso, formatTime12h } from "@/lib/format";
 import type { LoopStop, LegStatus } from "@/lib/types";
 import type { Session } from "@/lib/session";
 import type { AccountSearchResult } from "@/lib/salesforce/accounts";
@@ -18,6 +20,16 @@ import RouteMap from "@/components/internal/RouteMap";
 
 const DURATIONS = [15, 30, 45, 60];
 const CANDIDATE_ID = "candidate";
+
+function toMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/** Pure time-window overlap — pre-existing calendar events have no lat/lng, so this can't go through the drive-time leg logic. */
+function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
 
 export default function CheckFitTool({
   currentUser,
@@ -35,7 +47,19 @@ export default function CheckFitTool({
   onAddedStopsChange?: (updater: (prev: LoopStop[]) => LoopStop[]) => void;
 }) {
   const assignedExternals = currentUser.assignedExternals ?? [];
-  const [wholesalerId, setWholesalerId] = useState(assignedExternals[0]?.id ?? "");
+  // Scoped per signed-in internal/admin user, in case a shared device is
+  // ever used by more than one of them.
+  const wholesalerStorageKey = `loop-review:selected-wholesaler:${currentUser.userId}`;
+  const [wholesalerId, setWholesalerId] = useState(() => {
+    if (typeof window === "undefined") return assignedExternals[0]?.id ?? "";
+    const saved = window.localStorage.getItem(wholesalerStorageKey);
+    if (saved && assignedExternals.some((w) => w.id === saved)) return saved;
+    return assignedExternals[0]?.id ?? "";
+  });
+
+  useEffect(() => {
+    if (wholesalerId) localStorage.setItem(wholesalerStorageKey, wholesalerId);
+  }, [wholesalerId, wholesalerStorageKey]);
   const [date, setDate] = useState(todayIso());
   const [firmName, setFirmName] = useState("");
   const [address, setAddress] = useState("");
@@ -62,6 +86,19 @@ export default function CheckFitTool({
   const [localAddedStops, setLocalAddedStops] = useState<LoopStop[]>([]);
   const addedStops = controlledAddedStops ?? localAddedStops;
   const setAddedStops = onAddedStopsChange ?? setLocalAddedStops;
+  const [removingStopId, setRemovingStopId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<{ stopId: string; message: string } | null>(null);
+
+  const wholesalerEmail = assignedExternals.find((w) => w.id === wholesalerId)?.email;
+  const [timeZone, setTimeZone] = usePersistedTimezone(
+    `loop-review:timezone:${currentUser.userId}:${wholesalerId}`
+  );
+  const {
+    stops: outlookStops,
+    preExisting,
+    connected: outlookConnected,
+    loading: outlookLoading,
+  } = useOutlookLoop(date, wholesalerEmail ? { wholesalerId, email: wholesalerEmail, timeZone } : undefined);
 
   // Clears any stale confirm/error state left over from a previous submit
   // attempt on this same candidate. Not called from the auto-clear-on-success
@@ -177,11 +214,11 @@ export default function CheckFitTool({
 
   const baseLoop = useMemo(() => {
     const stops = [
-      ...getStopsForDate(wholesalerId, date),
+      ...outlookStops,
       ...addedStops.filter((s) => s.wholesalerId === wholesalerId && s.meetingDate === date),
     ];
     return buildLoop(stops, date);
-  }, [wholesalerId, date, addedStops]);
+  }, [outlookStops, wholesalerId, date, addedStops]);
 
   const candidateResult = useMemo(() => {
     // Requires real coords — never builds a candidate at a guessed location.
@@ -200,22 +237,39 @@ export default function CheckFitTool({
     };
 
     const existing = [
-      ...getStopsForDate(wholesalerId, date),
+      ...outlookStops,
       ...addedStops.filter((s) => s.wholesalerId === wholesalerId && s.meetingDate === date),
     ];
     const loop = buildLoop([...existing, candidate], date);
     const index = loop.stops.findIndex((s) => s.id === CANDIDATE_ID);
 
     return { loop, index };
-  }, [wholesalerId, date, firmName, address, coords, accountId, time, duration, addedStops]);
+  }, [outlookStops, wholesalerId, date, firmName, address, coords, accountId, time, duration, addedStops]);
 
   const wholesalerName = assignedExternals.find((w) => w.id === wholesalerId)?.name;
   const estimatedDisplayLoop = candidateResult ? candidateResult.loop : baseLoop;
   const displayLoop = useRealDriveTimes(estimatedDisplayLoop);
 
   const candidateIndex = candidateResult?.index ?? -1;
+
+  // Pre-existing calendar events (no lat/lng, so they never go through
+  // buildLoop's drive-time legs) still need to block the candidate time
+  // slot outright if they overlap — this is a straightforward double-
+  // booking, not a drive-time squeeze.
+  const candidateOverlapsExisting = useMemo(() => {
+    if (candidateIndex < 0 || !time) return false;
+    const candidateStart = toMinutes(time);
+    const candidateEnd = candidateStart + duration;
+    return preExisting.some((event) => {
+      const eventStart = toMinutes(event.start.slice(11, 16));
+      const eventEnd = toMinutes(event.end.slice(11, 16));
+      return overlaps(candidateStart, candidateEnd, eventStart, eventEnd);
+    });
+  }, [candidateIndex, time, duration, preExisting]);
+
   const verdict: LegStatus | null = useMemo(() => {
     if (candidateIndex < 0) return null;
+    if (candidateOverlapsExisting) return "conflict";
     const incomingLeg = candidateIndex > 0 ? displayLoop.legs[candidateIndex - 1] : null;
     const outgoingLeg =
       candidateIndex < displayLoop.stops.length - 1 ? displayLoop.legs[candidateIndex] : null;
@@ -223,10 +277,10 @@ export default function CheckFitTool({
     if (statuses.includes("conflict")) return "conflict";
     if (statuses.includes("tight")) return "tight";
     return "ok";
-  }, [candidateIndex, displayLoop]);
+  }, [candidateIndex, candidateOverlapsExisting, displayLoop]);
 
   const submitSchedule = async () => {
-    if (!coords) return; // guard only — the button isn't reachable without real coords
+    if (!coords || !wholesalerEmail) return; // guard only — the button isn't reachable without these
     setScheduleState("submitting");
     try {
       const res = await fetch("/api/loop/schedule", {
@@ -234,9 +288,12 @@ export default function CheckFitTool({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           wholesalerId,
+          wholesalerEmail,
+          timeZone,
           accountId,
           firmName: firmName.trim() || "Candidate firm",
           address: { street: address.trim(), city: "", state: "", zip: "" },
+          ...coords,
           meetingDate: date,
           meetingTime: time,
           durationMinutes: duration,
@@ -288,11 +345,40 @@ export default function CheckFitTool({
     }
   };
 
-  // Added stops only exist as session-local state (see scheduleVisit's TODO),
-  // so "removing" one is just dropping it from that state — there's nothing
-  // in Salesforce to undo yet.
-  const handleRemoveStop = (stopId: string) => {
-    setAddedStops((prev) => prev.filter((s) => s.id !== stopId));
+  // Mocked stops (dev/no Outlook connection) only ever existed as
+  // session-local state, so removing one is just dropping it. Real stops
+  // were actually written to the wholesaler's Outlook calendar, so removing
+  // one has to delete the real event there too — otherwise it'd just
+  // disappear from the app while still sitting on their calendar.
+  const handleRemoveStop = async (stop: LoopStop) => {
+    if (stop.mockRecord) {
+      setAddedStops((prev) => prev.filter((s) => s.id !== stop.id));
+      return;
+    }
+
+    if (!wholesalerEmail) return;
+    if (!window.confirm(`Remove ${stop.firmName} from ${wholesalerName}'s Outlook calendar?`)) return;
+
+    setRemoveError(null);
+    setRemovingStopId(stop.id);
+    try {
+      const res = await fetch("/api/loop/schedule", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wholesalerEmail, eventId: stop.sfId ?? stop.id }),
+      });
+      const result: { success: boolean; error?: string } = await res.json();
+      if (result.success) {
+        setAddedStops((prev) => prev.filter((s) => s.id !== stop.id));
+      } else {
+        setRemoveError({ stopId: stop.id, message: result.error ?? "Couldn't remove this visit." });
+      }
+    } catch (err) {
+      console.error("Failed to remove Outlook event:", err);
+      setRemoveError({ stopId: stop.id, message: "Network error — please try again." });
+    } finally {
+      setRemovingStopId(null);
+    }
   };
 
   return (
@@ -352,7 +438,20 @@ export default function CheckFitTool({
               />
             </label>
 
-            <div className="hidden lg:block" />
+            <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+              {wholesalerName ?? "Wholesaler"}&apos;s Timezone
+              <select
+                value={timeZone}
+                onChange={(e) => setTimeZone(e.target.value)}
+                className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
+              >
+                {COMMON_TIMEZONES.map((tz) => (
+                  <option key={tz.value} value={tz.value}>
+                    {tz.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
             <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
               Candidate Firm Name/Phone
@@ -434,7 +533,18 @@ export default function CheckFitTool({
             </div>
           </section>
 
-          {baseLoop.stops.length === 0 && !candidateResult ? (
+          {!outlookLoading && !outlookConnected ? (
+            <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 p-10 text-center text-slate-500">
+              <span className="text-3xl">📅</span>
+              <p className="font-semibold">Connect Outlook to review wholesalers&apos; schedules.</p>
+              <a
+                href="/api/auth/microsoft/login"
+                className="mt-2 flex h-11 items-center justify-center rounded-lg bg-brand-teal px-4 text-sm font-bold text-white active:opacity-80"
+              >
+                Connect Outlook
+              </a>
+            </div>
+          ) : baseLoop.stops.length === 0 && !candidateResult && preExisting.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 p-10 text-center text-slate-500">
               <span className="text-3xl">📭</span>
               <p className="font-semibold">{wholesalerName} has no stops scheduled for this date.</p>
@@ -516,21 +626,25 @@ export default function CheckFitTool({
                         </div>
                       )}
                       {stop.mockRecord !== undefined && (
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <p
-                            className={`text-xs font-bold uppercase tracking-wide ${
-                              stop.mockRecord ? "text-amber-700" : "text-emerald-700"
-                            }`}
-                          >
-                            {stop.mockRecord ? "Added this session" : "Saved"}
-                          </p>
-                          {stop.mockRecord && (
-                            <button
-                              onClick={() => handleRemoveStop(stop.id)}
-                              className="text-xs font-bold uppercase tracking-wide text-red-600 underline underline-offset-2"
+                        <div className="mb-1 flex flex-col gap-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p
+                              className={`text-xs font-bold uppercase tracking-wide ${
+                                stop.mockRecord ? "text-amber-700" : "text-emerald-700"
+                              }`}
                             >
-                              Remove
+                              {stop.mockRecord ? "Added this session" : "Saved"}
+                            </p>
+                            <button
+                              onClick={() => handleRemoveStop(stop)}
+                              disabled={removingStopId === stop.id}
+                              className="text-xs font-bold uppercase tracking-wide text-red-600 underline underline-offset-2 disabled:opacity-50"
+                            >
+                              {removingStopId === stop.id ? "Removing…" : "Remove"}
                             </button>
+                          </div>
+                          {removeError?.stopId === stop.id && (
+                            <p className="text-xs font-medium text-red-600">{removeError.message}</p>
                           )}
                         </div>
                       )}
@@ -547,6 +661,23 @@ export default function CheckFitTool({
                     </div>
                   ))}
                 </div>
+
+                {preExisting.length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                      Also on {wholesalerName}&apos;s calendar today
+                    </p>
+                    {preExisting.map((event) => (
+                      <div key={event.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                        <p className="text-sm font-semibold text-slate-800">{event.subject}</p>
+                        <p className="text-xs text-slate-500">
+                          {formatTime12h(event.start.slice(11, 16))} – {formatTime12h(event.end.slice(11, 16))}
+                          {event.location && ` · ${event.location}`}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="lg:sticky lg:top-8 lg:h-[calc(100vh-4rem)]">
