@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { buildLoop } from "@/lib/routing-engine";
+import { buildLoop, isSameLocation, mergeDuplicateStops } from "@/lib/routing-engine";
 import { useRealDriveTimes } from "@/lib/use-real-drive-times";
 import { useOutlookLoop } from "@/lib/use-outlook-loop";
 import { usePersistedTimezone } from "@/lib/use-persisted-timezone";
+import { usePersistedValue } from "@/lib/use-persisted-value";
 import { COMMON_TIMEZONES } from "@/lib/timezones";
 import { formatAddress } from "@/lib/maps-links";
 import { todayIso, formatTime12h } from "@/lib/format";
@@ -16,7 +17,7 @@ import StopCard from "@/components/StopCard";
 import ConflictBanner from "@/components/ConflictBanner";
 import AddressAutocompleteInput, { type PlaceSelection } from "@/components/internal/AddressAutocompleteInput";
 import FirmNameAutocompleteInput from "@/components/internal/FirmNameAutocompleteInput";
-import RouteMap from "@/components/internal/RouteMap";
+import RouteMap from "@/components/RouteMap";
 
 const DURATIONS = [15, 30, 45, 60];
 const CANDIDATE_ID = "candidate";
@@ -50,16 +51,13 @@ export default function CheckFitTool({
   // Scoped per signed-in internal/admin user, in case a shared device is
   // ever used by more than one of them.
   const wholesalerStorageKey = `loop-review:selected-wholesaler:${currentUser.userId}`;
-  const [wholesalerId, setWholesalerId] = useState(() => {
-    if (typeof window === "undefined") return assignedExternals[0]?.id ?? "";
-    const saved = window.localStorage.getItem(wholesalerStorageKey);
-    if (saved && assignedExternals.some((w) => w.id === saved)) return saved;
-    return assignedExternals[0]?.id ?? "";
-  });
-
-  useEffect(() => {
-    if (wholesalerId) localStorage.setItem(wholesalerStorageKey, wholesalerId);
-  }, [wholesalerId, wholesalerStorageKey]);
+  const defaultWholesalerId = assignedExternals[0]?.id ?? "";
+  const [storedWholesalerId, setWholesalerId] = usePersistedValue(wholesalerStorageKey, defaultWholesalerId);
+  // Falls back to the first assigned wholesaler if the saved id is no
+  // longer one of them (e.g. their assignment changed since it was saved).
+  const wholesalerId = assignedExternals.some((w) => w.id === storedWholesalerId)
+    ? storedWholesalerId
+    : defaultWholesalerId;
   const [date, setDate] = useState(todayIso());
   const [firmName, setFirmName] = useState("");
   const [address, setAddress] = useState("");
@@ -70,6 +68,13 @@ export default function CheckFitTool({
   const [geocoding, setGeocoding] = useState(false);
   const [geocodeFailed, setGeocodeFailed] = useState(false);
   const [accountId, setAccountId] = useState<string | null>(null);
+  // Captured alongside accountId so the candidate preview (and the stop
+  // added from it) can show Last Activity Date / Location AUM without an
+  // extra round-trip — the account search/lookup already returns them.
+  const [accountDetails, setAccountDetails] = useState<{
+    lastActivityDate: string | null;
+    locationAum: number | null;
+  } | null>(null);
   const [time, setTime] = useState("");
   const [duration, setDuration] = useState(30);
   const [scheduleState, setScheduleState] = useState<
@@ -112,6 +117,7 @@ export default function CheckFitTool({
     setFirmName(value);
     // Typing breaks the link to whichever Account was previously selected.
     setAccountId(null);
+    setAccountDetails(null);
     clearStaleScheduleState();
   };
 
@@ -125,6 +131,7 @@ export default function CheckFitTool({
     setCoordsSource(null);
     setGeocodeFailed(false);
     setAccountId(null);
+    setAccountDetails(null);
     clearStaleScheduleState();
   };
 
@@ -146,6 +153,7 @@ export default function CheckFitTool({
       if (match) {
         setFirmName((current) => (current.trim() ? current : match.name));
         setAccountId(match.id);
+        setAccountDetails({ lastActivityDate: match.lastActivityDate, locationAum: match.locationAum });
         return;
       }
     } catch (err) {
@@ -161,6 +169,7 @@ export default function CheckFitTool({
   const handleAccountSelected = (account: AccountSearchResult) => {
     setFirmName(account.name);
     setAccountId(account.id);
+    setAccountDetails({ lastActivityDate: account.lastActivityDate, locationAum: account.locationAum });
     setAddress(formatAddress(account.address));
     setGeocodeFailed(false);
     if (account.lat !== null && account.lng !== null) {
@@ -212,13 +221,19 @@ export default function CheckFitTool({
     };
   }, [address, coords]);
 
-  const baseLoop = useMemo(() => {
+  // Deduplicated once here (not inside buildLoop) specifically so a
+  // brand-new candidate the internal is actively checking never gets
+  // silently merged away just because it happens to match an existing
+  // stop's time and location.
+  const existingStops = useMemo(() => {
     const stops = [
       ...outlookStops,
       ...addedStops.filter((s) => s.wholesalerId === wholesalerId && s.meetingDate === date),
     ];
-    return buildLoop(stops, date);
+    return mergeDuplicateStops(stops);
   }, [outlookStops, wholesalerId, date, addedStops]);
+
+  const baseLoop = useMemo(() => buildLoop(existingStops, date), [existingStops, date]);
 
   const candidateResult = useMemo(() => {
     // Requires real coords — never builds a candidate at a guessed location.
@@ -227,6 +242,9 @@ export default function CheckFitTool({
     const candidate: LoopStop = {
       id: CANDIDATE_ID,
       sfId: accountId ?? undefined,
+      accountId: accountId ?? undefined,
+      lastActivityDate: accountDetails?.lastActivityDate ?? null,
+      locationAum: accountDetails?.locationAum ?? null,
       wholesalerId,
       firmName: firmName.trim() || "Candidate firm",
       address: { street: address.trim(), city: "", state: "", zip: "" },
@@ -236,15 +254,11 @@ export default function CheckFitTool({
       durationMinutes: duration,
     };
 
-    const existing = [
-      ...outlookStops,
-      ...addedStops.filter((s) => s.wholesalerId === wholesalerId && s.meetingDate === date),
-    ];
-    const loop = buildLoop([...existing, candidate], date);
+    const loop = buildLoop([...existingStops, candidate], date);
     const index = loop.stops.findIndex((s) => s.id === CANDIDATE_ID);
 
     return { loop, index };
-  }, [outlookStops, wholesalerId, date, firmName, address, coords, accountId, time, duration, addedStops]);
+  }, [existingStops, wholesalerId, date, firmName, address, coords, accountId, accountDetails, time, duration]);
 
   const wholesalerName = assignedExternals.find((w) => w.id === wholesalerId)?.name;
   const estimatedDisplayLoop = candidateResult ? candidateResult.loop : baseLoop;
@@ -308,6 +322,9 @@ export default function CheckFitTool({
             sfId: result.recordId,
             mockRecord: result.mocked,
             wholesalerId,
+            accountId: accountId ?? undefined,
+            lastActivityDate: accountDetails?.lastActivityDate ?? null,
+            locationAum: accountDetails?.locationAum ?? null,
             firmName: firmName.trim() || "Candidate firm",
             address: { street: address.trim(), city: "", state: "", zip: "" },
             ...coords,
@@ -324,6 +341,7 @@ export default function CheckFitTool({
         setAddress("");
         setCoords(null);
         setAccountId(null);
+        setAccountDetails(null);
         setTime("");
         setScheduleState("success");
       } else {
@@ -651,7 +669,7 @@ export default function CheckFitTool({
                       <div className={stop.id === CANDIDATE_ID ? "rounded-2xl ring-2 ring-brand-orange" : ""}>
                         <StopCard stop={stop} />
                       </div>
-                      {i < displayLoop.legs.length && (
+                      {i < displayLoop.legs.length && !isSameLocation(stop, displayLoop.stops[i + 1]) && (
                         <ConflictBanner
                           leg={displayLoop.legs[i]}
                           fromName={stop.firmName}

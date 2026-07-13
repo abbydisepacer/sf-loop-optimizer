@@ -27,6 +27,19 @@ export function formatDateHeading(dateIso: string): string {
   });
 }
 
+export function formatShortDate(dateIso: string): string {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+export function formatAum(amount: number): string {
+  if (amount >= 1_000_000_000) return `$${(amount / 1_000_000_000).toFixed(2)}B`;
+  if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(2)}M`;
+  if (amount >= 1_000) return `$${(amount / 1_000).toFixed(2)}K`;
+  return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export function todayIso(): string {
   const today = new Date();
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(

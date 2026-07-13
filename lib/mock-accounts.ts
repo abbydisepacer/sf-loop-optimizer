@@ -13,6 +13,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "100 Matsonford Rd", city: "Wayne", state: "PA", zip: "19087" },
     lat: 40.0496407,
     lng: -75.3567947,
+    lastActivityDate: "2026-06-18",
+    locationAum: 42_500_000,
   },
   {
     id: "a0B1x0000006abdEAA",
@@ -20,6 +22,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "22 W Market St", city: "West Chester", state: "PA", zip: "19382" },
     lat: 39.9591974,
     lng: -75.6051139,
+    lastActivityDate: "2026-05-29",
+    locationAum: 118_200_000,
   },
   {
     id: "a0B1x0000006abeEAA",
@@ -27,6 +31,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "1 Liberty Blvd", city: "Exton", state: "PA", zip: "19341" },
     lat: 40.0557138,
     lng: -75.5268798,
+    lastActivityDate: "2026-04-02",
+    locationAum: 76_800_000,
   },
   {
     id: "a0B1x0000006abfEAA",
@@ -34,6 +40,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "919 Conestoga Rd", city: "Bryn Mawr", state: "PA", zip: "19010" },
     lat: 40.0259252,
     lng: -75.3353822,
+    lastActivityDate: "2026-06-30",
+    locationAum: 265_000_000,
   },
   {
     id: "a0B1x0000006abgEAA",
@@ -41,6 +49,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "1000 First Ave", city: "King of Prussia", state: "PA", zip: "19406" },
     lat: 40.0959898,
     lng: -75.4077401,
+    lastActivityDate: "2026-03-11",
+    locationAum: 33_400_000,
   },
   {
     id: "a0B1x0000006abhEAA",
@@ -48,6 +58,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "725 Skippack Pike", city: "Blue Bell", state: "PA", zip: "19422" },
     lat: 40.1552519,
     lng: -75.2692209,
+    lastActivityDate: "2026-06-09",
+    locationAum: 91_600_000,
   },
   {
     id: "a0B1x0000006abiEAA",
@@ -55,6 +67,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "555 E Lancaster Ave", city: "Radnor", state: "PA", zip: "19087" },
     lat: 40.041191,
     lng: -75.3676536,
+    lastActivityDate: "2026-02-20",
+    locationAum: 152_000_000,
   },
   {
     id: "a0B1x0000006abjEAA",
@@ -62,6 +76,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "10 Great Valley Pkwy", city: "Malvern", state: "PA", zip: "19355" },
     lat: 40.0631434,
     lng: -75.5359146,
+    lastActivityDate: "2026-06-22",
+    locationAum: 58_900_000,
   },
   {
     id: "a0B1x0000006abkEAA",
@@ -69,6 +85,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "156 W Lancaster Ave", city: "Devon", state: "PA", zip: "19333" },
     lat: 40.0455708,
     lng: -75.422765,
+    lastActivityDate: "2026-01-15",
+    locationAum: 21_300_000,
   },
   {
     id: "a0B1x0000006ablEAA",
@@ -76,6 +94,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "500 W Germantown Pike", city: "Plymouth Meeting", state: "PA", zip: "19462" },
     lat: 40.1142712,
     lng: -75.2846715,
+    lastActivityDate: "2026-05-05",
+    locationAum: 134_700_000,
   },
   {
     id: "a0B1x0000006abmEAA",
@@ -83,6 +103,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "45 N Main St", city: "Ambler", state: "PA", zip: "19002" },
     lat: 40.1549568,
     lng: -75.2247868,
+    lastActivityDate: "2026-06-27",
+    locationAum: 47_100_000,
   },
   {
     id: "a0B1x0000006abnEAA",
@@ -90,6 +112,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "77 W Court St", city: "Doylestown", state: "PA", zip: "18901" },
     lat: 40.3097953,
     lng: -75.1321629,
+    lastActivityDate: "2026-04-18",
+    locationAum: 87_500_000,
   },
   {
     id: "a0B1x0000006abzEAA",
@@ -97,6 +121,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "789 Lancaster Ave", city: "Wayne", state: "PA", zip: "19087" },
     lat: 40.0484173,
     lng: -75.4108985,
+    lastActivityDate: "2026-06-14",
+    locationAum: 199_300_000,
   },
   {
     // Demonstrates an Account with no geocoded Billing Address on file —
@@ -106,6 +132,8 @@ export const MOCK_ACCOUNTS: AccountSearchResult[] = [
     address: { street: "212 W Lancaster Ave", city: "Devon", state: "PA", zip: "19333" },
     lat: null,
     lng: null,
+    lastActivityDate: null,
+    locationAum: null,
   },
 ];
 

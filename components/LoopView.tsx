@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { buildLoop } from "@/lib/routing-engine";
+import { buildLoop, isSameLocation, mergeDuplicateStops } from "@/lib/routing-engine";
 import { useRealDriveTimes } from "@/lib/use-real-drive-times";
 import { useOutlookLoop, type PreExistingEvent } from "@/lib/use-outlook-loop";
 import { usePersistedTimezone } from "@/lib/use-persisted-timezone";
@@ -12,6 +12,7 @@ import type { LoopStop, ScheduledStop } from "@/lib/types";
 import DateSelector from "./DateSelector";
 import StopCard from "./StopCard";
 import ConflictBanner from "./ConflictBanner";
+import RouteMap from "./RouteMap";
 
 type TimelineEntry =
   | { type: "stop"; time: string; stop: ScheduledStop; stopIndex: number }
@@ -34,6 +35,7 @@ export default function LoopView({
   extraStops?: LoopStop[];
 }) {
   const [date, setDate] = useState(todayIso());
+  const [viewMode, setViewMode] = useState<"list" | "map">("list");
   const who = subject ?? { id: currentUser.userId, name: currentUser.name };
 
   // Only relevant when previewing someone else's calendar (the admin "View
@@ -51,10 +53,10 @@ export default function LoopView({
   const { stops: outlookStops, preExisting, connected, loading } = useOutlookLoop(date, target);
 
   const estimatedLoop = useMemo(() => {
-    const stops = [
+    const stops = mergeDuplicateStops([
       ...outlookStops,
       ...(extraStops ?? []).filter((s) => s.wholesalerId === who.id && s.meetingDate === date),
-    ];
+    ]);
     return buildLoop(stops, date);
   }, [outlookStops, who.id, date, extraStops]);
 
@@ -112,18 +114,38 @@ export default function LoopView({
           </div>
         )}
         {loop.stops.length > 0 && (
-          <div className="flex gap-3 px-4 pb-3 text-sm font-semibold">
-            <span className="text-slate-600">{loop.stops.length} stops</span>
-            {conflictCount > 0 && (
-              <span className="text-red-600">
-                {conflictCount} conflict{conflictCount === 1 ? "" : "s"}
-              </span>
-            )}
-            {tightCount > 0 && (
-              <span className="text-amber-600">
-                {tightCount} tight
-              </span>
-            )}
+          <div className="flex items-center justify-between gap-3 px-4 pb-3">
+            <div className="flex gap-3 text-sm font-semibold">
+              <span className="text-slate-600">{loop.stops.length} stops</span>
+              {conflictCount > 0 && (
+                <span className="text-red-600">
+                  {conflictCount} conflict{conflictCount === 1 ? "" : "s"}
+                </span>
+              )}
+              {tightCount > 0 && (
+                <span className="text-amber-600">
+                  {tightCount} tight
+                </span>
+              )}
+            </div>
+            <div className="flex rounded-lg border border-slate-300 p-0.5">
+              <button
+                onClick={() => setViewMode("list")}
+                className={`h-8 rounded-md px-3 text-xs font-bold ${
+                  viewMode === "list" ? "bg-slate-900 text-white" : "text-slate-600"
+                }`}
+              >
+                List
+              </button>
+              <button
+                onClick={() => setViewMode("map")}
+                className={`h-8 rounded-md px-3 text-xs font-bold ${
+                  viewMode === "map" ? "bg-slate-900 text-white" : "text-slate-600"
+                }`}
+              >
+                Map
+              </button>
+            </div>
           </div>
         )}
       </header>
@@ -145,6 +167,10 @@ export default function LoopView({
             <span className="text-3xl">📭</span>
             <p className="font-semibold">No stops scheduled for this date.</p>
           </div>
+        ) : viewMode === "map" ? (
+          <div className="h-[calc(100dvh-11rem)] min-h-[320px]">
+            <RouteMap stops={loop.stops} legs={loop.legs} />
+          </div>
         ) : (
           timeline.map((entry, i) => {
             if (entry.type === "event") {
@@ -165,7 +191,10 @@ export default function LoopView({
             // between means there's no meaningful "leg" to show here.
             const next = timeline[i + 1];
             const showLeg =
-              stopIndex < loop.legs.length && next?.type === "stop" && next.stopIndex === stopIndex + 1;
+              stopIndex < loop.legs.length &&
+              next?.type === "stop" &&
+              next.stopIndex === stopIndex + 1 &&
+              !isSameLocation(stop, loop.stops[stopIndex + 1]);
 
             return (
               <div key={stop.id}>

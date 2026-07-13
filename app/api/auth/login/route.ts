@@ -7,10 +7,11 @@ import {
   OAUTH_VERIFIER_COOKIE_NAME,
 } from "@/lib/salesforce/auth";
 import { generatePkcePair } from "@/lib/pkce";
+import { getRequestOrigin } from "@/lib/request-origin";
 
 export async function GET(request: NextRequest) {
   if (!isSalesforceConfigured()) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(new URL("/login", getRequestOrigin(request)));
   }
 
   const state = randomBytes(16).toString("hex");

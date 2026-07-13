@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSalesforceConfigured } from "@/lib/salesforce/auth";
 import { signSession, SESSION_COOKIE_NAME } from "@/lib/session";
 import { MOCK_WHOLESALERS, MOCK_INTERNAL_WHOLESALERS } from "@/lib/mock-data";
+import { getRequestOrigin } from "@/lib/request-origin";
+
+/** Mirrors the real Salesforce query's `ORDER BY FirstName` — see lib/salesforce/auth.ts. */
+function byFirstName<T extends { name: string }>(a: T, b: T): number {
+  return a.name.split(" ")[0].localeCompare(b.name.split(" ")[0]);
+}
 
 /**
  * Dev-only stand-in for the real Salesforce OAuth flow, used until a
@@ -33,15 +39,17 @@ export async function GET(request: NextRequest) {
             userId: "mock-admin",
             name: "Admin User",
             role: "admin" as const,
-            assignedExternals: MOCK_WHOLESALERS.map((w) => ({ id: w.id, name: w.name, email: w.email })),
+            assignedExternals: MOCK_WHOLESALERS.map((w) => ({ id: w.id, name: w.name, email: w.email })).sort(
+              byFirstName
+            ),
           }
         : (() => {
             const internalId = url.searchParams.get("internal") ?? MOCK_INTERNAL_WHOLESALERS[0].id;
             const internalUser =
               MOCK_INTERNAL_WHOLESALERS.find((i) => i.id === internalId) ?? MOCK_INTERNAL_WHOLESALERS[0];
-            const assignedExternals = MOCK_WHOLESALERS.filter(
-              (w) => w.internalWholesalerId === internalUser.id
-            ).map((w) => ({ id: w.id, name: w.name, email: w.email }));
+            const assignedExternals = MOCK_WHOLESALERS.filter((w) => w.internalWholesalerId === internalUser.id)
+              .map((w) => ({ id: w.id, name: w.name, email: w.email }))
+              .sort(byFirstName);
             return {
               userId: internalUser.id,
               name: internalUser.name,
@@ -50,7 +58,7 @@ export async function GET(request: NextRequest) {
             };
           })();
 
-  const response = NextResponse.redirect(new URL("/", request.url));
+  const response = NextResponse.redirect(new URL("/", getRequestOrigin(request)));
   response.cookies.set(SESSION_COOKIE_NAME, signSession(session), {
     httpOnly: true,
     secure: true,

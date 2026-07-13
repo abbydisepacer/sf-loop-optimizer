@@ -20,6 +20,63 @@ function haversineMiles(
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+// Two points within this distance are treated as "the same place" (same
+// building/parking lot) rather than a real drive between them — comparing
+// geocoded coordinates rather than address text, since address formatting
+// can differ (e.g. "123 Main St" vs "123 Main Street, Philadelphia, PA
+// 19103") even when they're the exact same location.
+const SAME_LOCATION_THRESHOLD_MILES = 0.03; // ~50 meters
+
+export function isSameLocation(a: { lat: number; lng: number }, b: { lat: number; lng: number }): boolean {
+  return haversineMiles(a, b) < SAME_LOCATION_THRESHOLD_MILES;
+}
+
+/**
+ * Collapses stops that share both the same location and the same fixed
+ * meeting time into one — most likely the same real meeting recorded
+ * twice (e.g. an app-created visit and a separately-added calendar entry
+ * for it), not two separate things happening at once in the same place.
+ * Keeps whichever one is more informative as the primary — an actual
+ * scheduled/candidate stop over one only promoted from a pre-existing
+ * calendar event, since the latter is just a generic subject line with no
+ * Salesforce link — but doesn't discard the other one's title; it's kept
+ * in `additionalTitles` so the UI can show both side by side (see
+ * StopCard) rather than silently losing whichever one didn't win. Not
+ * applied to flexible (no fixed meetingTime) stops — there's no time to
+ * compare, so merging those on location alone risks hiding a real stop.
+ */
+export function mergeDuplicateStops(stops: LoopStop[]): LoopStop[] {
+  const merged: LoopStop[] = [];
+
+  for (const stop of stops) {
+    const existingIndex =
+      stop.meetingTime === null
+        ? -1
+        : merged.findIndex((m) => m.meetingTime === stop.meetingTime && isSameLocation(m, stop));
+
+    if (existingIndex === -1) {
+      merged.push(stop);
+      continue;
+    }
+
+    const existing = merged[existingIndex];
+    const preferNew = existing.fromCalendarEvent && !stop.fromCalendarEvent;
+    const winner = preferNew ? stop : existing;
+    const loser = preferNew ? existing : stop;
+
+    merged[existingIndex] = {
+      ...winner,
+      // The longer of the two — if either event was actually going to run
+      // longer, the merged stop should block that much time, regardless of
+      // which one otherwise "won" as the primary.
+      durationMinutes: Math.max(winner.durationMinutes, loser.durationMinutes),
+      additionalTitles: [...(winner.additionalTitles ?? []), ...(loser.additionalTitles ?? []), loser.firmName],
+    };
+  }
+
+  return merged;
+}
+
 /**
  * Placeholder for the Google Distance Matrix API. Estimates suburban
  * drive time from straight-line distance, average speed, and a fixed

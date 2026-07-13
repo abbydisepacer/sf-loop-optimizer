@@ -7,12 +7,14 @@ import {
 } from "@/lib/microsoft/auth";
 import { setMicrosoftTokens } from "@/lib/microsoft/token-store";
 import { verifySession, SESSION_COOKIE_NAME } from "@/lib/session";
+import { getRequestOrigin } from "@/lib/request-origin";
 
 export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
+  const origin = getRequestOrigin(request);
   const session = verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!session) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(new URL("/login", origin));
   }
 
   const url = new URL(request.url);
@@ -22,7 +24,7 @@ export async function GET(request: NextRequest) {
   const codeVerifier = cookieStore.get(MS_OAUTH_VERIFIER_COOKIE_NAME)?.value;
 
   if (!code || !state || !expectedState || state !== expectedState || !codeVerifier) {
-    return NextResponse.redirect(new URL("/?error=outlook_invalid_state", request.url));
+    return NextResponse.redirect(new URL("/?error=outlook_invalid_state", origin));
   }
 
   try {
@@ -37,12 +39,12 @@ export async function GET(request: NextRequest) {
       microsoftTokenExpiresAt: Date.now() + token.expires_in * 1000,
     });
 
-    const response = NextResponse.redirect(new URL("/", request.url));
+    const response = NextResponse.redirect(new URL("/", origin));
     response.cookies.delete(MS_OAUTH_STATE_COOKIE_NAME);
     response.cookies.delete(MS_OAUTH_VERIFIER_COOKIE_NAME);
     return response;
   } catch (err) {
     console.error("Microsoft OAuth callback failed:", err);
-    return NextResponse.redirect(new URL("/?error=outlook_connect_failed", request.url));
+    return NextResponse.redirect(new URL("/?error=outlook_connect_failed", origin));
   }
 }

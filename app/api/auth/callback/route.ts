@@ -8,16 +8,18 @@ import {
   OAUTH_VERIFIER_COOKIE_NAME,
 } from "@/lib/salesforce/auth";
 import { signSession, SESSION_COOKIE_NAME } from "@/lib/session";
+import { getRequestOrigin } from "@/lib/request-origin";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
+  const origin = getRequestOrigin(request);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const expectedState = request.cookies.get(OAUTH_STATE_COOKIE_NAME)?.value;
   const codeVerifier = request.cookies.get(OAUTH_VERIFIER_COOKIE_NAME)?.value;
 
   if (!code || !state || !expectedState || state !== expectedState || !codeVerifier) {
-    return NextResponse.redirect(new URL("/login?error=invalid_state", request.url));
+    return NextResponse.redirect(new URL("/login?error=invalid_state", origin));
   }
 
   try {
@@ -30,7 +32,7 @@ export async function GET(request: NextRequest) {
         ? `Salesforce role "${profile.roleName}" isn't recognized as Internal Wholesaler, External Wholesaler, or View All.`
         : "This Salesforce user has no Role assigned.";
       return NextResponse.redirect(
-        new URL(`/login?error=${encodeURIComponent(message)}`, request.url)
+        new URL(`/login?error=${encodeURIComponent(message)}`, origin)
       );
     }
 
@@ -54,7 +56,7 @@ export async function GET(request: NextRequest) {
       salesforceAccessToken: token.access_token,
       salesforceInstanceUrl: token.instance_url,
     });
-    const response = NextResponse.redirect(new URL("/", request.url));
+    const response = NextResponse.redirect(new URL("/", origin));
     response.cookies.set(SESSION_COOKIE_NAME, session, {
       httpOnly: true,
       secure: true,
@@ -67,6 +69,6 @@ export async function GET(request: NextRequest) {
     return response;
   } catch (err) {
     console.error("Salesforce OAuth callback failed:", err);
-    return NextResponse.redirect(new URL("/login?error=auth_failed", request.url));
+    return NextResponse.redirect(new URL("/login?error=auth_failed", origin));
   }
 }

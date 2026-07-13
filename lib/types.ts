@@ -40,6 +40,32 @@ export type LoopStop = {
    * saved. Only meaningful for stops added this session.
    */
   mockRecord?: boolean;
+  /**
+   * True for a pre-existing Outlook event (not created by this app) that
+   * had a resolvable address and got promoted into the routable loop — see
+   * lib/microsoft/calendar.ts. Lets the UI distinguish it from an actual
+   * scheduled firm visit, since its "firmName" is really just the
+   * calendar event's subject line.
+   */
+  fromCalendarEvent?: boolean;
+  /**
+   * The Salesforce Account this stop is linked to, if any — lets a later
+   * calendar read re-fetch fresh lastActivityDate/locationAum for it (see
+   * lib/salesforce/accounts.ts's fetchAccountDetailsByIds). Never set for a
+   * fromCalendarEvent stop, since those aren't linked to a Salesforce record.
+   */
+  accountId?: string;
+  /** Standard Salesforce field — refreshed on each read rather than frozen at creation time. */
+  lastActivityDate?: string | null;
+  /** Custom field, gated on SALESFORCE_LOCATION_AUM_FIELD — see lib/salesforce/accounts.ts. */
+  locationAum?: number | null;
+  /**
+   * Names of other stops merged into this one by mergeDuplicateStops (same
+   * time, same location — most likely the same real meeting recorded more
+   * than once). Shown side by side with `firmName` rather than dropped, so
+   * nothing about the other event is lost just because it looked redundant.
+   */
+  additionalTitles?: string[];
 };
 
 export type LegStatus = "ok" | "tight" | "conflict";

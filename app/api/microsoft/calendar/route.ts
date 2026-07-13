@@ -4,6 +4,7 @@ import { verifySession, SESSION_COOKIE_NAME } from "@/lib/session";
 import { getValidMicrosoftToken } from "@/lib/microsoft/auth";
 import { getMicrosoftTokens, setMicrosoftTokens } from "@/lib/microsoft/token-store";
 import { getCalendarEvents } from "@/lib/microsoft/calendar";
+import { fetchAccountDetailsByIds, findAccountsNearAddress } from "@/lib/salesforce/accounts";
 
 /**
  * Reads a wholesaler's Outlook calendar for one date. An external session
@@ -76,6 +77,56 @@ export async function GET(request: NextRequest) {
         microsoftTokenExpiresAt: tokenResult.refreshed.expiresAt,
       });
     }
+
+    // Last Activity Date / Location AUM can change after a visit was
+    // originally scheduled, so they're re-fetched fresh on every read
+    // rather than trusted from whatever was frozen in the Outlook event at
+    // creation time. Only possible with a real Salesforce session — skipped
+    // silently in mock-login/dev mode.
+    if (session.salesforceAccessToken && session.salesforceInstanceUrl) {
+      const accessToken = session.salesforceAccessToken;
+      const instanceUrl = session.salesforceInstanceUrl;
+
+      const accountIds = [...new Set(stops.map((s) => s.accountId).filter((id): id is string => Boolean(id)))];
+      if (accountIds.length > 0) {
+        try {
+          const details = await fetchAccountDetailsByIds(accessToken, instanceUrl, accountIds);
+          for (const stop of stops) {
+            const d = stop.accountId ? details.get(stop.accountId) : undefined;
+            if (d) {
+              stop.lastActivityDate = d.lastActivityDate;
+              stop.locationAum = d.locationAum;
+            }
+          }
+        } catch (err) {
+          console.error("Failed to enrich stops with Account details:", err);
+        }
+      }
+
+      // Fallback for a visit scheduled before this app started embedding
+      // accountId in the Outlook event — its marker payload predates that
+      // field, so there's nothing to look up by Id. Matches on the stop's
+      // own address instead, the same proximity lookup used when picking a
+      // new candidate's address (see CheckFitTool's handlePlaceSelected).
+      const staleStops = stops.filter((s) => !s.accountId && !s.fromCalendarEvent);
+      for (const stop of staleStops) {
+        try {
+          const [match] = await findAccountsNearAddress(accessToken, instanceUrl, {
+            lat: stop.lat,
+            lng: stop.lng,
+            streetFragment: stop.address.street,
+          });
+          if (match) {
+            stop.accountId = match.id;
+            stop.lastActivityDate = match.lastActivityDate;
+            stop.locationAum = match.locationAum;
+          }
+        } catch (err) {
+          console.error("Failed to match stale stop to an Account by address:", err);
+        }
+      }
+    }
+
     return NextResponse.json({ stops, preExisting, connected: true });
   } catch (err) {
     console.error("Failed to read Outlook calendar:", err);

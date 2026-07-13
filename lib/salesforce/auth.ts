@@ -133,7 +133,7 @@ export async function fetchAssignedExternalWholesalers(
     return [];
   }
 
-  const soql = `SELECT Id, Name, Email FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true AND ${field} = '${internalUserId}'`;
+  const soql = `SELECT Id, Name, Email FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true AND ${field} = '${internalUserId}' ORDER BY FirstName`;
   const res = await fetch(
     `${token.instance_url}/services/data/${SALESFORCE_API_VERSION}/query?q=${encodeURIComponent(soql)}`,
     { headers: { Authorization: `Bearer ${token.access_token}` } }
@@ -174,7 +174,7 @@ export async function fetchAllExternalWholesalers(token: {
   access_token: string;
   instance_url: string;
 }): Promise<AssignedExternal[]> {
-  const soql = `SELECT Id, Name, Email FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true`;
+  const soql = `SELECT Id, Name, Email FROM User WHERE UserRole.Name = 'External Wholesaler' AND IsActive = true ORDER BY FirstName`;
   const res = await fetch(
     `${token.instance_url}/services/data/${SALESFORCE_API_VERSION}/query?q=${encodeURIComponent(soql)}`,
     { headers: { Authorization: `Bearer ${token.access_token}` } }

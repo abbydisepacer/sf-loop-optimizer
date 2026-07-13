@@ -9,6 +9,7 @@ import {
 } from "@/lib/microsoft/auth";
 import { generatePkcePair } from "@/lib/pkce";
 import { verifySession, SESSION_COOKIE_NAME } from "@/lib/session";
+import { getRequestOrigin } from "@/lib/request-origin";
 
 /**
  * Unlike /api/auth/login (which establishes identity), this connects an
@@ -25,7 +26,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!isMicrosoftConfigured()) {
-    return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.redirect(new URL("/", getRequestOrigin(request)));
   }
 
   const state = randomBytes(16).toString("hex");
