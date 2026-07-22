@@ -6,17 +6,18 @@ import { useRealDriveTimes } from "@/lib/use-real-drive-times";
 import { useOutlookLoop } from "@/lib/use-outlook-loop";
 import { usePersistedTimezone } from "@/lib/use-persisted-timezone";
 import { usePersistedValue } from "@/lib/use-persisted-value";
+import { useScheduleVisit } from "@/lib/use-schedule-visit";
 import { COMMON_TIMEZONES } from "@/lib/timezones";
 import { formatAddress } from "@/lib/maps-links";
 import { todayIso, formatTime12h } from "@/lib/format";
 import type { LoopStop, LegStatus } from "@/lib/types";
 import type { Session } from "@/lib/session";
 import type { AccountSearchResult } from "@/lib/salesforce/accounts";
-import type { ScheduleVisitResult } from "@/lib/salesforce/loop-write";
 import StopCard from "@/components/StopCard";
 import ConflictBanner from "@/components/ConflictBanner";
 import AddressAutocompleteInput, { type PlaceSelection } from "@/components/internal/AddressAutocompleteInput";
 import FirmNameAutocompleteInput from "@/components/internal/FirmNameAutocompleteInput";
+import SuggestedFAs from "@/components/internal/SuggestedFAs";
 import RouteMap from "@/components/RouteMap";
 
 const DURATIONS = [15, 30, 45, 60];
@@ -77,10 +78,6 @@ export default function CheckFitTool({
   } | null>(null);
   const [time, setTime] = useState("");
   const [duration, setDuration] = useState(30);
-  const [scheduleState, setScheduleState] = useState<
-    "idle" | "confirming" | "submitting" | "success" | "error"
-  >("idle");
-  const [scheduleError, setScheduleError] = useState<string | null>(null);
   // Captured at submit time so the success message can still name the firm
   // after the candidate fields are cleared.
   const [lastScheduledFirmName, setLastScheduledFirmName] = useState("");
@@ -105,13 +102,13 @@ export default function CheckFitTool({
     loading: outlookLoading,
   } = useOutlookLoop(date, wholesalerEmail ? { wholesalerId, email: wholesalerEmail, timeZone } : undefined);
 
-  // Clears any stale confirm/error state left over from a previous submit
-  // attempt on this same candidate. Not called from the auto-clear-on-success
-  // path below, since that's a programmatic reset, not the user editing.
-  const clearStaleScheduleState = () => {
-    setScheduleState("idle");
-    setScheduleError(null);
-  };
+  const {
+    state: scheduleState,
+    error: scheduleError,
+    submit,
+    requestConfirm,
+    reset: clearStaleScheduleState,
+  } = useScheduleVisit(setAddedStops);
 
   const handleFirmNameChange = (value: string) => {
     setFirmName(value);
@@ -295,63 +292,31 @@ export default function CheckFitTool({
 
   const submitSchedule = async () => {
     if (!coords || !wholesalerEmail) return; // guard only — the button isn't reachable without these
-    setScheduleState("submitting");
-    try {
-      const res = await fetch("/api/loop/schedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          wholesalerId,
-          wholesalerEmail,
-          timeZone,
-          accountId,
-          firmName: firmName.trim() || "Candidate firm",
-          address: { street: address.trim(), city: "", state: "", zip: "" },
-          ...coords,
-          meetingDate: date,
-          meetingTime: time,
-          durationMinutes: duration,
-        }),
-      });
-      const result: ScheduleVisitResult = await res.json();
-      if (result.success) {
-        setAddedStops((prev) => [
-          ...prev,
-          {
-            id: result.recordId,
-            sfId: result.recordId,
-            mockRecord: result.mocked,
-            wholesalerId,
-            accountId: accountId ?? undefined,
-            lastActivityDate: accountDetails?.lastActivityDate ?? null,
-            locationAum: accountDetails?.locationAum ?? null,
-            firmName: firmName.trim() || "Candidate firm",
-            address: { street: address.trim(), city: "", state: "", zip: "" },
-            ...coords,
-            meetingDate: date,
-            meetingTime: time,
-            durationMinutes: duration,
-          },
-        ]);
-        // Clear the candidate fields immediately — otherwise they'd still
-        // describe a "candidate" identical to the stop we just added,
-        // which would register as conflicting with itself.
-        setLastScheduledFirmName(firmName.trim() || "Candidate firm");
-        setFirmName("");
-        setAddress("");
-        setCoords(null);
-        setAccountId(null);
-        setAccountDetails(null);
-        setTime("");
-        setScheduleState("success");
-      } else {
-        setScheduleError(result.error ?? "Something went wrong.");
-        setScheduleState("error");
-      }
-    } catch (err) {
-      console.error("Failed to schedule visit:", err);
-      setScheduleError("Network error — please try again.");
-      setScheduleState("error");
+    const ok = await submit({
+      wholesalerId,
+      wholesalerEmail,
+      timeZone,
+      accountId,
+      firmName: firmName.trim() || "Candidate firm",
+      address: { street: address.trim(), city: "", state: "", zip: "" },
+      ...coords,
+      meetingDate: date,
+      meetingTime: time,
+      durationMinutes: duration,
+      lastActivityDate: accountDetails?.lastActivityDate ?? null,
+      locationAum: accountDetails?.locationAum ?? null,
+    });
+    if (ok) {
+      // Clear the candidate fields immediately — otherwise they'd still
+      // describe a "candidate" identical to the stop we just added,
+      // which would register as conflicting with itself.
+      setLastScheduledFirmName(firmName.trim() || "Candidate firm");
+      setFirmName("");
+      setAddress("");
+      setCoords(null);
+      setAccountId(null);
+      setAccountDetails(null);
+      setTime("");
     }
   };
 
@@ -359,7 +324,7 @@ export default function CheckFitTool({
     if (verdict === "ok") {
       submitSchedule();
     } else {
-      setScheduleState("confirming");
+      requestConfirm();
     }
   };
 
@@ -400,7 +365,7 @@ export default function CheckFitTool({
   };
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col gap-6 bg-slate-50 px-6 py-8">
+    <div className="mx-auto flex min-h-dvh w-full max-w-screen-2xl flex-col gap-6 bg-slate-50 px-6 py-8">
       <header>
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-extrabold text-brand-green">Wholesaler Loop Review</h1>
@@ -423,291 +388,304 @@ export default function CheckFitTool({
           </p>
         </div>
       ) : (
-        <>
-          <section className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:grid-cols-2 lg:grid-cols-3">
-            <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
-              Wholesaler
-              <select
-                value={wholesalerId}
-                onChange={(e) => {
-                  setWholesalerId(e.target.value);
-                  clearStaleScheduleState();
-                }}
-                className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
-              >
-                {assignedExternals.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
-              Date
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => {
-                  setDate(e.target.value);
-                  clearStaleScheduleState();
-                }}
-                className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
-              {wholesalerName ?? "Wholesaler"}&apos;s Timezone
-              <select
-                value={timeZone}
-                onChange={(e) => setTimeZone(e.target.value)}
-                className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
-              >
-                {COMMON_TIMEZONES.map((tz) => (
-                  <option key={tz.value} value={tz.value}>
-                    {tz.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
-              Candidate Firm Name/Phone
-              <FirmNameAutocompleteInput
-                value={firmName}
-                onChange={handleFirmNameChange}
-                onAccountSelected={handleAccountSelected}
-                placeholder="Search by name or phone…"
-                className="h-11 w-full rounded-lg border border-slate-300 px-3 font-normal"
-              />
-              {accountId && (
-                <span className="text-xs font-normal text-emerald-600">
-                  Existing Salesforce Account — address filled in from their record
-                </span>
-              )}
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
-              Candidate Address
-              <AddressAutocompleteInput
-                value={address}
-                onChange={handleAddressChange}
-                onPlaceSelected={handlePlaceSelected}
-                placeholder="Start typing an address…"
-                className="h-11 w-full rounded-lg border border-slate-300 px-3 font-normal"
-              />
-              {address && (
-                <span
-                  className={`text-xs font-normal ${
-                    coords ? "text-emerald-600" : geocodeFailed ? "text-red-600" : "text-slate-400"
-                  }`}
-                >
-                  {coords
-                    ? coordsSource === "account"
-                      ? "Using this Account's geocoded address on file"
-                      : coordsSource === "search"
-                        ? "Using precise location from address search"
-                        : "Using a geocoded location for this address"
-                    : geocoding
-                      ? "Resolving location…"
-                      : geocodeFailed
-                        ? "Couldn't find that address — check it and try again"
-                        : "Pick a suggestion for a precise drive-time estimate"}
-                </span>
-              )}
-            </label>
-
-            <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_380px] lg:items-start">
+          <div className="flex flex-col gap-6">
+            <section className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:grid-cols-2 lg:grid-cols-3">
               <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
-                Meeting Time
-                <input
-                  type="time"
-                  value={time}
-                  onChange={(e) => {
-                    setTime(e.target.value);
-                    clearStaleScheduleState();
-                  }}
-                  className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
-                />
-              </label>
-
-              <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
-                Duration
+                Wholesaler
                 <select
-                  value={duration}
+                  value={wholesalerId}
                   onChange={(e) => {
-                    setDuration(Number(e.target.value));
+                    setWholesalerId(e.target.value);
                     clearStaleScheduleState();
                   }}
                   className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
                 >
-                  {DURATIONS.map((d) => (
-                    <option key={d} value={d}>
-                      {d} min
+                  {assignedExternals.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
                     </option>
                   ))}
                 </select>
               </label>
-            </div>
-          </section>
+  
+              <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+                Date
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => {
+                    setDate(e.target.value);
+                    clearStaleScheduleState();
+                  }}
+                  className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
+                />
+              </label>
+  
+              <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+                {wholesalerName ?? "Wholesaler"}&apos;s Timezone
+                <select
+                  value={timeZone}
+                  onChange={(e) => setTimeZone(e.target.value)}
+                  className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
+                >
+                  {COMMON_TIMEZONES.map((tz) => (
+                    <option key={tz.value} value={tz.value}>
+                      {tz.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+  
+              <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+                Candidate Firm Name/Phone
+                <FirmNameAutocompleteInput
+                  value={firmName}
+                  onChange={handleFirmNameChange}
+                  onAccountSelected={handleAccountSelected}
+                  placeholder="Search by name or phone…"
+                  className="h-11 w-full rounded-lg border border-slate-300 px-3 font-normal"
+                />
+                {accountId && (
+                  <span className="text-xs font-normal text-emerald-600">
+                    Existing Salesforce Account — address filled in from their record
+                  </span>
+                )}
+              </label>
+  
+              <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+                Candidate Address
+                <AddressAutocompleteInput
+                  value={address}
+                  onChange={handleAddressChange}
+                  onPlaceSelected={handlePlaceSelected}
+                  placeholder="Start typing an address…"
+                  className="h-11 w-full rounded-lg border border-slate-300 px-3 font-normal"
+                />
+                {address && (
+                  <span
+                    className={`text-xs font-normal ${
+                      coords ? "text-emerald-600" : geocodeFailed ? "text-red-600" : "text-slate-400"
+                    }`}
+                  >
+                    {coords
+                      ? coordsSource === "account"
+                        ? "Using this Account's geocoded address on file"
+                        : coordsSource === "search"
+                          ? "Using precise location from address search"
+                          : "Using a geocoded location for this address"
+                      : geocoding
+                        ? "Resolving location…"
+                        : geocodeFailed
+                          ? "Couldn't find that address — check it and try again"
+                          : "Pick a suggestion for a precise drive-time estimate"}
+                  </span>
+                )}
+              </label>
+  
+              <div className="grid grid-cols-2 gap-4">
+                <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+                  Meeting Time
+                  <input
+                    type="time"
+                    value={time}
+                    onChange={(e) => {
+                      setTime(e.target.value);
+                      clearStaleScheduleState();
+                    }}
+                    className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
+                  />
+                </label>
+  
+                <label className="flex flex-col gap-1 text-sm font-semibold text-slate-700">
+                  Duration
+                  <select
+                    value={duration}
+                    onChange={(e) => {
+                      setDuration(Number(e.target.value));
+                      clearStaleScheduleState();
+                    }}
+                    className="h-11 rounded-lg border border-slate-300 px-3 font-normal"
+                  >
+                    {DURATIONS.map((d) => (
+                      <option key={d} value={d}>
+                        {d} min
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </section>
 
-          {!outlookLoading && !outlookConnected ? (
-            <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 p-10 text-center text-slate-500">
-              <span className="text-3xl">📅</span>
-              <p className="font-semibold">Connect Outlook to review wholesalers&apos; schedules.</p>
-              <a
-                href="/api/auth/microsoft/login"
-                className="mt-2 flex h-11 items-center justify-center rounded-lg bg-brand-teal px-4 text-sm font-bold text-white active:opacity-80"
-              >
-                Connect Outlook
-              </a>
-            </div>
-          ) : baseLoop.stops.length === 0 && !candidateResult && preExisting.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 p-10 text-center text-slate-500">
-              <span className="text-3xl">📭</span>
-              <p className="font-semibold">{wholesalerName} has no stops scheduled for this date.</p>
-              <p className="text-sm">Enter a candidate firm above to check whether it fits.</p>
-            </div>
-          ) : (
-            <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <div className="flex flex-col gap-4">
-                <div className="sticky top-4 z-10">
-                  {verdict ? (
-                    <VerdictBanner verdict={verdict} />
-                  ) : (
-                    <p className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-500">
-                      Showing {wholesalerName}&apos;s scheduled loop. Enter a candidate firm above
-                      to check whether it fits.
-                    </p>
-                  )}
-                </div>
-
-                {(verdict || scheduleState === "success") && (
-                  <div>
-                    {scheduleState === "success" ? (
-                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-emerald-600 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-                        <span>
-                          ✅ Added {lastScheduledFirmName} to {wholesalerName}&apos;s schedule.
-                        </span>
-                        <button onClick={() => setScheduleState("idle")} className="font-bold underline">
-                          Dismiss
-                        </button>
-                      </div>
-                    ) : scheduleState === "confirming" ? (
-                      <div className="flex flex-col gap-2 rounded-xl border-2 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        <p className="font-semibold">
-                          {verdict === "conflict"
-                            ? "This creates a scheduling conflict — add anyway?"
-                            : "This is a tight turnaround — add anyway?"}
-                        </p>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={submitSchedule}
-                            className="h-10 rounded-lg bg-amber-600 px-4 text-sm font-bold text-white active:bg-amber-700"
-                          >
-                            Yes, schedule anyway
-                          </button>
-                          <button
-                            onClick={() => setScheduleState("idle")}
-                            className="h-10 rounded-lg border-2 border-amber-600 px-4 text-sm font-bold text-amber-800 active:bg-amber-100"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
+            {!outlookLoading && !outlookConnected ? (
+              <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 p-10 text-center text-slate-500">
+                <span className="text-3xl">📅</span>
+                <p className="font-semibold">Connect Outlook to review wholesalers&apos; schedules.</p>
+                <a
+                  href="/api/auth/microsoft/login"
+                  className="mt-2 flex h-11 items-center justify-center rounded-lg bg-brand-teal px-4 text-sm font-bold text-white active:opacity-80"
+                >
+                  Connect Outlook
+                </a>
+              </div>
+            ) : baseLoop.stops.length === 0 && !candidateResult && preExisting.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 p-10 text-center text-slate-500">
+                <span className="text-3xl">📭</span>
+                <p className="font-semibold">{wholesalerName} has no stops scheduled for this date.</p>
+                <p className="text-sm">Enter a candidate firm above to check whether it fits.</p>
+              </div>
+            ) : (
+              <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div className="flex flex-col gap-4">
+                  <div className="sticky top-4 z-10">
+                    {verdict ? (
+                      <VerdictBanner verdict={verdict} />
                     ) : (
-                      <div className="flex flex-col gap-1">
-                        <button
-                          onClick={handleAddToScheduleClick}
-                          disabled={scheduleState === "submitting"}
-                          className="flex h-11 items-center justify-center rounded-lg bg-brand-teal px-4 text-sm font-bold text-white active:opacity-80 disabled:opacity-60"
-                        >
-                          {scheduleState === "submitting" ? "Adding…" : "Add to Schedule"}
-                        </button>
-                        {scheduleState === "error" && (
-                          <p className="text-xs font-medium text-red-600">{scheduleError}</p>
-                        )}
-                      </div>
+                      <p className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-500">
+                        Showing {wholesalerName}&apos;s scheduled loop. Enter a candidate firm above
+                        to check whether it fits.
+                      </p>
                     )}
                   </div>
-                )}
-
-                <div className="flex flex-col gap-0">
-                  {displayLoop.stops.map((stop, i) => (
-                    <div key={stop.id}>
-                      {stop.id === CANDIDATE_ID && verdict && (
-                        <div className="mb-1 flex items-center gap-2">
-                          <span className="text-xs font-bold uppercase tracking-wide text-brand-orange">
-                            Candidate firm
+  
+                  {(verdict || scheduleState === "success") && (
+                    <div>
+                      {scheduleState === "success" ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-emerald-600 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                          <span>
+                            ✅ Added {lastScheduledFirmName} to {wholesalerName}&apos;s schedule.
                           </span>
-                          <VerdictPill verdict={verdict} />
+                          <button onClick={clearStaleScheduleState} className="font-bold underline">
+                            Dismiss
+                          </button>
                         </div>
-                      )}
-                      {stop.mockRecord !== undefined && (
-                        <div className="mb-1 flex flex-col gap-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <p
-                              className={`text-xs font-bold uppercase tracking-wide ${
-                                stop.mockRecord ? "text-amber-700" : "text-emerald-700"
-                              }`}
-                            >
-                              {stop.mockRecord ? "Added this session" : "Saved"}
-                            </p>
+                      ) : scheduleState === "confirming" ? (
+                        <div className="flex flex-col gap-2 rounded-xl border-2 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          <p className="font-semibold">
+                            {verdict === "conflict"
+                              ? "This creates a scheduling conflict — add anyway?"
+                              : "This is a tight turnaround — add anyway?"}
+                          </p>
+                          <div className="flex gap-2">
                             <button
-                              onClick={() => handleRemoveStop(stop)}
-                              disabled={removingStopId === stop.id}
-                              className="text-xs font-bold uppercase tracking-wide text-red-600 underline underline-offset-2 disabled:opacity-50"
+                              onClick={submitSchedule}
+                              className="h-10 rounded-lg bg-amber-600 px-4 text-sm font-bold text-white active:bg-amber-700"
                             >
-                              {removingStopId === stop.id ? "Removing…" : "Remove"}
+                              Yes, schedule anyway
+                            </button>
+                            <button
+                              onClick={clearStaleScheduleState}
+                              className="h-10 rounded-lg border-2 border-amber-600 px-4 text-sm font-bold text-amber-800 active:bg-amber-100"
+                            >
+                              Cancel
                             </button>
                           </div>
-                          {removeError?.stopId === stop.id && (
-                            <p className="text-xs font-medium text-red-600">{removeError.message}</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          <button
+                            onClick={handleAddToScheduleClick}
+                            disabled={scheduleState === "submitting"}
+                            className="flex h-11 items-center justify-center rounded-lg bg-brand-teal px-4 text-sm font-bold text-white active:opacity-80 disabled:opacity-60"
+                          >
+                            {scheduleState === "submitting" ? "Adding…" : "Add to Schedule"}
+                          </button>
+                          {scheduleState === "error" && (
+                            <p className="text-xs font-medium text-red-600">{scheduleError}</p>
                           )}
                         </div>
                       )}
-                      <div className={stop.id === CANDIDATE_ID ? "rounded-2xl ring-2 ring-brand-orange" : ""}>
-                        <StopCard stop={stop} />
-                      </div>
-                      {i < displayLoop.legs.length && !isSameLocation(stop, displayLoop.stops[i + 1]) && (
-                        <ConflictBanner
-                          leg={displayLoop.legs[i]}
-                          fromName={stop.firmName}
-                          toName={displayLoop.stops[i + 1].firmName}
-                        />
-                      )}
                     </div>
-                  ))}
-                </div>
-
-                {preExisting.length > 0 && (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                      Also on {wholesalerName}&apos;s calendar today
-                    </p>
-                    {preExisting.map((event) => (
-                      <div key={event.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                        <p className="text-sm font-semibold text-slate-800">{event.subject}</p>
-                        <p className="text-xs text-slate-500">
-                          {formatTime12h(event.start.slice(11, 16))} – {formatTime12h(event.end.slice(11, 16))}
-                          {event.location && ` · ${event.location}`}
-                        </p>
+                  )}
+  
+                  <div className="flex flex-col gap-0">
+                    {displayLoop.stops.map((stop, i) => (
+                      <div key={stop.id}>
+                        {stop.id === CANDIDATE_ID && verdict && (
+                          <div className="mb-1 flex items-center gap-2">
+                            <span className="text-xs font-bold uppercase tracking-wide text-brand-orange">
+                              Candidate firm
+                            </span>
+                            <VerdictPill verdict={verdict} />
+                          </div>
+                        )}
+                        {stop.mockRecord !== undefined && (
+                          <div className="mb-1 flex flex-col gap-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p
+                                className={`text-xs font-bold uppercase tracking-wide ${
+                                  stop.mockRecord ? "text-amber-700" : "text-emerald-700"
+                                }`}
+                              >
+                                {stop.mockRecord ? "Added this session" : "Saved"}
+                              </p>
+                              <button
+                                onClick={() => handleRemoveStop(stop)}
+                                disabled={removingStopId === stop.id}
+                                className="text-xs font-bold uppercase tracking-wide text-red-600 underline underline-offset-2 disabled:opacity-50"
+                              >
+                                {removingStopId === stop.id ? "Removing…" : "Remove"}
+                              </button>
+                            </div>
+                            {removeError?.stopId === stop.id && (
+                              <p className="text-xs font-medium text-red-600">{removeError.message}</p>
+                            )}
+                          </div>
+                        )}
+                        <div className={stop.id === CANDIDATE_ID ? "rounded-2xl ring-2 ring-brand-orange" : ""}>
+                          <StopCard stop={stop} />
+                        </div>
+                        {i < displayLoop.legs.length && !isSameLocation(stop, displayLoop.stops[i + 1]) && (
+                          <ConflictBanner
+                            leg={displayLoop.legs[i]}
+                            fromName={stop.firmName}
+                            toName={displayLoop.stops[i + 1].firmName}
+                          />
+                        )}
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
+  
+                  {preExisting.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                        Also on {wholesalerName}&apos;s calendar today
+                      </p>
+                      {preExisting.map((event) => (
+                        <div key={event.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                          <p className="text-sm font-semibold text-slate-800">{event.subject}</p>
+                          <p className="text-xs text-slate-500">
+                            {formatTime12h(event.start.slice(11, 16))} – {formatTime12h(event.end.slice(11, 16))}
+                            {event.location && ` · ${event.location}`}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+  
+                <div className="lg:sticky lg:top-8 lg:h-[calc(100vh-4rem)]">
+                  <RouteMap
+                    stops={displayLoop.stops}
+                    legs={displayLoop.legs}
+                    candidateId={candidateResult ? CANDIDATE_ID : undefined}
+                  />
+                </div>
+              </section>
+            )}
+          </div>
 
-              <div className="lg:sticky lg:top-8 lg:h-[calc(100vh-4rem)]">
-                <RouteMap
-                  stops={displayLoop.stops}
-                  legs={displayLoop.legs}
-                  candidateId={candidateResult ? CANDIDATE_ID : undefined}
-                />
-              </div>
-            </section>
-          )}
-        </>
+          <div className="lg:sticky lg:top-8 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto">
+            <SuggestedFAs
+              wholesalerId={wholesalerId}
+              date={date}
+              existingStops={existingStops}
+              timeZone={timeZone}
+              wholesalerEmail={wholesalerEmail}
+              setAddedStops={setAddedStops}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
@@ -744,7 +722,7 @@ function VerdictBanner({ verdict }: { verdict: "ok" | "tight" | "conflict" }) {
 }
 
 /** Compact fit/no-fit badge pinned directly to the candidate's stop card. */
-function VerdictPill({ verdict }: { verdict: "ok" | "tight" | "conflict" }) {
+export function VerdictPill({ verdict }: { verdict: "ok" | "tight" | "conflict" }) {
   const copy = VERDICT_COPY[verdict];
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${copy.pillStyle}`}>

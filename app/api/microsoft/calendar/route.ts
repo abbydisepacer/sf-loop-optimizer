@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { verifySession, SESSION_COOKIE_NAME } from "@/lib/session";
-import { getValidMicrosoftToken } from "@/lib/microsoft/auth";
+import { getValidMicrosoftToken, isMicrosoftConfigured } from "@/lib/microsoft/auth";
 import { getMicrosoftTokens, setMicrosoftTokens } from "@/lib/microsoft/token-store";
 import { getCalendarEvents } from "@/lib/microsoft/calendar";
 import { fetchAccountDetailsByIds, findAccountsNearAddress } from "@/lib/salesforce/accounts";
+import { getStopsForDate } from "@/lib/mock-data";
 
 /**
  * Reads a wholesaler's Outlook calendar for one date. An external session
@@ -41,6 +42,15 @@ export async function GET(request: NextRequest) {
     if (!wholesalerId || !email) {
       return NextResponse.json({ stops: [], preExisting: [], connected: false });
     }
+  }
+
+  // Azure AD app registration isn't configured yet (dev/mock-login mode) —
+  // "Connect Outlook" isn't offered anywhere in this mode, so treat the
+  // wholesaler as reachable with an empty starting schedule instead of
+  // showing the "Connect Outlook" wall, matching the same graceful
+  // degradation the mock Salesforce login already gets.
+  if (!isMicrosoftConfigured()) {
+    return NextResponse.json({ stops: getStopsForDate(wholesalerId, date), preExisting: [], connected: true });
   }
 
   const tokenData = getMicrosoftTokens(session.userId);

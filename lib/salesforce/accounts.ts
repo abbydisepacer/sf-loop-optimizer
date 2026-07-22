@@ -1,4 +1,5 @@
 import { SALESFORCE_API_VERSION } from "./auth";
+import { escapeSoql, runQuery } from "./query";
 
 export type AccountSearchResult = {
   id: string;
@@ -38,11 +39,6 @@ type AccountRecord = {
 
 const AUM_FIELD = process.env.SALESFORCE_LOCATION_AUM_FIELD;
 
-/** Escapes single quotes for SOQL string literals — required to safely interpolate user input. */
-function escapeSoql(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
-
 /** Reads a dynamically-named custom field off a record without an index signature on AccountRecord itself. */
 function getCustomField(record: object, fieldName: string): unknown {
   return (record as Record<string, unknown>)[fieldName];
@@ -78,18 +74,6 @@ const ACCOUNT_FIELDS = [
   "LastActivityDate",
   ...(AUM_FIELD ? [AUM_FIELD] : []),
 ].join(", ");
-
-async function runQuery<T>(accessToken: string, instanceUrl: string, soql: string): Promise<T[]> {
-  const res = await fetch(
-    `${instanceUrl}/services/data/${SALESFORCE_API_VERSION}/query?q=${encodeURIComponent(soql)}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-  if (!res.ok) {
-    throw new Error(`Salesforce query failed (${res.status}): ${await res.text()}`);
-  }
-  const data = await res.json();
-  return data.records ?? [];
-}
 
 async function runAccountQuery(
   accessToken: string,
